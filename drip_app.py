@@ -431,6 +431,7 @@ class App:
         canvas=tk.Canvas(overlay,width=monitor['width'],height=monitor['height'],highlightthickness=0)
         canvas.pack()
         photo=ImageTk.PhotoImage(image)
+        overlay._screen_photo=photo
         canvas.create_image(0,0,anchor='nw',image=photo)
         canvas.create_text(20,20,anchor='nw',fill='white',text='Drag over the video window. Esc cancels.',font=('Segoe UI',14,'bold'))
         start=[None,None]
