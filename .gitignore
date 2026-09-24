@@ -1,4 +1,5 @@
 .deps/
+.deps_disabled/
 .venv/
 __pycache__/
 inspection/

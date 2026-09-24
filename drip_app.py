@@ -60,6 +60,8 @@ class App:
         self.area_timeline=None
         self.reviewing=False
         self.files=[]
+        self.camera_mode=False
+        self.camera_device=None
         self.cap=None
         self.current=None
         self.meta=None
@@ -143,6 +145,7 @@ class App:
         left.pack_propagate(False)
         ttk.Label(left,text='1  VIDEO LIBRARY',font=('Segoe UI',10,'bold')).pack(anchor='w',pady=(0,8))
         ttk.Button(left,text='Add MP4 videos…',command=self.choose_files).pack(fill='x')
+        ttk.Button(left,text='Use camera source…',command=self.choose_camera).pack(fill='x',pady=(6,0))
         self.library=tk.Listbox(left,height=6,font=('Segoe UI',9),bg='white',fg='#172b40',
                                 selectbackground='#076b68',selectforeground='white',exportselection=False,
                                 relief='flat',borderwidth=0)
@@ -306,6 +309,19 @@ class App:
         self.progress=ttk.Progressbar(footer,maximum=100)
         self.progress.pack(fill='x',pady=(4,0))
 
+    def source_key(self, source):
+        if source is None:
+            return ('none', '')
+        text=str(source).strip()
+        if text.lower().startswith('camera:'):
+            return ('camera', text.lower())
+        if '://' in text:
+            return ('stream', text.lower())
+        try:
+            return ('file', str(Path(text).resolve()))
+        except Exception:
+            return ('text', text.lower())
+
     def add_files(self,files):
         for item in files:
             path=Path(item).resolve()
@@ -319,22 +335,154 @@ class App:
     def choose_files(self):
         self.add_files(filedialog.askopenfilenames(filetypes=[('Video','*.mp4 *.avi *.mkv *.mov'),('All files','*.*')]))
 
+    def choose_camera(self):
+        self.pause()
+        dialog=tk.Toplevel(self.root)
+        dialog.title('Choose camera source')
+        dialog.transient(self.root)
+        dialog.resizable(False,False)
+        dialog.grab_set()
+        frame=ttk.Frame(dialog,padding=16)
+        frame.pack(fill='both',expand=True)
+        ttk.Label(frame,text='Detected cameras',font=('Segoe UI',12,'bold')).pack(anchor='w')
+        ttk.Label(frame,text='Select a connected camera, or add a remote camera stream.',style='Small.TLabel').pack(anchor='w',pady=(2,10))
+        camera_list=tk.Listbox(frame,height=7,width=58,exportselection=False,
+                               selectbackground='#076b68',selectforeground='white')
+        camera_list.pack(fill='both',expand=True)
+        status=tk.StringVar(value='Scanning for connected cameras…')
+        ttk.Label(frame,textvariable=status,style='Small.TLabel').pack(anchor='w',pady=(8,10))
+
+        detected=[]
+
+        def scan():
+            detected.clear()
+            camera_list.delete(0,'end')
+            status.set('Scanning for connected cameras…')
+            dialog.update_idletasks()
+            for index in range(10):
+                cap=cv2.VideoCapture(index,cv2.CAP_DSHOW)
+                if not cap.isOpened():
+                    cap.release()
+                    continue
+                ok,frame=cap.read()
+                width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or (frame.shape[1] if ok else 0)
+                height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or (frame.shape[0] if ok else 0)
+                fps=cap.get(cv2.CAP_PROP_FPS) or 30.0
+                cap.release()
+                if ok:
+                    detected.append(index)
+                    camera_list.insert('end',f'Camera {index}  —  {width} × {height}  |  {fps:.1f} fps')
+            if detected:
+                camera_list.selection_set(0)
+                camera_list.focus_set()
+                status.set(f'{len(detected)} connected camera(s) detected.')
+            else:
+                status.set('No connected cameras detected. You can add a remote stream below.')
+
+        def use_selected():
+            selected=camera_list.curselection()
+            if not selected:
+                messagebox.showinfo('Choose a camera','Select a detected camera first.',parent=dialog)
+                return
+            source=f'camera:{detected[selected[0]]}'
+            dialog.destroy()
+            self.open_camera_source(source)
+
+        def add_camera():
+            source=simpledialog.askstring(
+                'Add camera or stream',
+                'Enter a remote stream URL (RTSP, HTTP, RTMP, UDP, or TCP):',
+                parent=dialog,
+            )
+            if source is None or not source.strip():
+                return
+            dialog.destroy()
+            self.open_camera_source(source.strip())
+
+        buttons=ttk.Frame(frame)
+        buttons.pack(fill='x',pady=(2,0))
+        ttk.Button(buttons,text='Refresh').pack(side='left')
+        buttons.winfo_children()[0].configure(command=scan)
+        ttk.Button(buttons,text='Use selected',style='Accent.TButton',command=use_selected).pack(side='left',padx=(6,0))
+        ttk.Button(buttons,text='Add camera or stream…',command=add_camera).pack(side='left',padx=(6,0))
+        ttk.Button(buttons,text='Cancel',command=dialog.destroy).pack(side='right')
+        dialog.protocol('WM_DELETE_WINDOW',dialog.destroy)
+        dialog.after(50,scan)
+
+    def open_camera_source(self, source):
+        source=source.strip()
+        try:
+            if self.cap:self.cap.release()
+            if source.lower().startswith('camera:'):
+                source_value=int(source.split(':',1)[1] or 0)
+            elif source.lower().startswith(('rtsp://','http://','https://','rtmp://','udp://','tcp://')):
+                source_value=source
+            else:
+                source_value=int(source) if source.isdigit() else source
+            cap=cv2.VideoCapture(source_value if isinstance(source_value,(int,float)) else str(source_value))
+            if not cap.isOpened():
+                raise ValueError(f'Cannot open source: {source}')
+            fps=cap.get(cv2.CAP_PROP_FPS) or 30.0
+            width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
+            height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
+            self.camera_mode=True
+            self.camera_device=source_value if isinstance(source_value,(int,float)) else source_value
+            self.cap=cap
+            self.meta=dict(width=width,height=height,fps=fps,frames=1_000_000,duration_seconds=0)
+            self.current=source_value if isinstance(source_value,(int,float)) else source_value
+            if isinstance(self.current, (int,float)):
+                self.current=f'camera:{int(self.current)}'
+            self.title.set(f'Camera {self.current}' if self.current.lower().startswith('camera:') else self.current)
+            self.info.set(f'Live camera feed\n{width} × {height}  |  {fps:.2f} fps')
+            self.slider.configure(state='disabled')
+            self.play_button.configure(text='Live')
+            self.index=0
+            self.frame=None
+            self.preview_regions=[]
+            self.auto_area.set(False)
+            self.change_area_mode()
+            status = f'Camera source ready on device {self.current}' if self.current.lower().startswith('camera:') else f'Remote stream ready: {self.current}'
+            self.status.set(f'{status}. Manual detection areas are active for live sources.')
+            self.read_camera_frame()
+        except Exception as exc:
+            messagebox.showerror('Cannot open camera',str(exc))
+
     def choose_video(self,event=None):
         selected=self.library.curselection()
         if selected:self.load_video(self.files[selected[0]])
 
+    def read_camera_frame(self):
+        if not self.camera_mode or not self.cap:return
+        ok,frame=self.cap.read()
+        if not ok:
+            self.status.set('Camera frame read failed.')
+            return
+        self.index=0
+        self.frame=frame
+        self.time_label.set('Live camera feed')
+        self.position.set(0)
+        self.render()
+
     def load_video(self,path,find_report=True):
+        self.camera_mode=False
+        self.camera_device=None
         self.pause()
         try:
             cap,meta=open_video(path)
             if self.cap:self.cap.release()
             self.cap,self.meta,self.current=cap,meta,Path(path).resolve()
+            self.slider.configure(state='normal')
             self.auto_tracker=AreaTracker(meta['fps'],self.live_tracking_config())
             self.auto_state=None
             self.preview_regions=None
             self.area_timeline=None
             self.reviewing=False
-            self.title.set(self.current.name)
+            if isinstance(self.current, str) and self.current.lower().startswith('camera:'):
+                self.title.set(f"Camera {self.current.split(':',1)[1]}")
+            elif isinstance(self.current, str) and '://' in self.current:
+                self.title.set(self.current.split('://',1)[1].split('/',1)[0])
+            else:
+                self.title.set(Path(str(self.current)).name)
             self.info.set(f"{meta['width']} × {meta['height']}  |  {meta['fps']:.2f} fps\n{meta['duration_seconds']:.2f} seconds")
             self.slider.configure(to=max(1,meta['frames']-1))
             self.report=None
@@ -346,7 +494,7 @@ class App:
                 for p in (ROOT/'output').glob('*/results.json'):
                     try:
                         r=json.loads(p.read_text(encoding='utf-8'))
-                        if Path(r['source']).resolve()==self.current and r['state']=='complete':results.append((p,r))
+                        if self.source_key(r.get('source')) == self.source_key(self.current) and r['state']=='complete':results.append((p,r))
                     except (OSError,ValueError,KeyError):continue
                 if results:
                     p,r=max(results,key=lambda item:item[0].stat().st_mtime)
@@ -354,6 +502,9 @@ class App:
         except Exception as exc:messagebox.showerror('Cannot open video',str(exc))
 
     def seek(self,index):
+        if self.camera_mode:
+            self.read_camera_frame()
+            return
         if not self.cap:return
         index=max(0,min(int(index),self.meta['frames']-1))
         if index!=self.index+1 or self.frame is None:self.cap.set(cv2.CAP_PROP_POS_FRAMES,index)
@@ -535,7 +686,12 @@ class App:
         if hasattr(self,'play_button'):self.play_button.configure(text='Play')
 
     def toggle_play(self):
-        if self.playing:self.pause()
+        if self.playing:
+            self.pause()
+        elif self.camera_mode and self.cap:
+            self.playing=True
+            self.play_button.configure(text='Stop')
+            self.live_tick()
         elif self.cap:
             if self.index>=self.meta['frames']-1:self.seek(0)
             self.playing=True
@@ -551,6 +707,20 @@ class App:
         self.seek(self.index+1)
         if self.playing:
             self.play_job=self.root.after(max(1,round(1000/self.meta['fps']/float(self.speed.get()[:-1]))),self.tick)
+
+    def live_tick(self):
+        self.play_job=None
+        if not self.playing or not self.camera_mode or not self.cap:
+            return
+        ok,frame=self.cap.read()
+        if not ok:
+            self.pause()
+            self.status.set('Camera feed stopped. Reconnect the device to continue.')
+            return
+        self.frame=frame
+        self.time_label.set('Live camera feed')
+        self.render()
+        self.play_job=self.root.after(max(1, int(1000 / max(self.meta['fps'], 1.0))), self.live_tick)
 
     def scrub(self,value):
         if not self.updating_slider:
@@ -824,10 +994,10 @@ class App:
                     self.status.set(data[1])
                 elif kind=='report':
                     folder,report=data
-                    if self.current and Path(report['source']).resolve()==self.current:self.set_report(folder,report)
+                    if self.current and self.source_key(report.get('source')) == self.source_key(self.current):self.set_report(folder,report)
                 elif kind=='partial_report':
                     folder,report=data
-                    if not self.run_gate.is_set() and self.current and Path(report['source']).resolve()==self.current:
+                    if not self.run_gate.is_set() and self.current and self.source_key(report.get('source')) == self.source_key(self.current):
                         self.set_report(folder,report)
                         scanned=report.get('scan_progress',{}).get('frames_scanned',0)
                         self.status.set(f'Paused: showing {len(report["events"])} provisional candidates from {scanned} scanned frames.')

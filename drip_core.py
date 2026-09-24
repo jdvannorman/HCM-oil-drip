@@ -134,16 +134,51 @@ def configure_cpu(config):
     config['cpu_mode']='auto' if requested=='auto' else 'manual'
     return threads
 
+def coerce_video_source(path):
+    if isinstance(path, (int, float)):
+        value=int(path)
+        if value>=0:return value
+        raise ValueError('Camera device index must be zero or greater.')
+    text=str(path).strip()
+    if not text:
+        raise ValueError('Video source is empty.')
+    if text.lower().startswith('camera:'):
+        value=text.split(':',1)[1].strip()
+        if not value:value='0'
+        return int(value)
+    if '://' in text:
+        return text
+    if text.lower().startswith(('rtsp://','http://','https://','rtmp://','udp://','tcp://')):
+        return text
+    return Path(text)
+
+
 def open_video(path):
-    cap = cv2.VideoCapture(str(path))
+    source = coerce_video_source(path)
+    if isinstance(source, int):
+        cap = cv2.VideoCapture(source)
+        if not cap.isOpened():
+            raise ValueError(f'Cannot open camera device {source}.')
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if n <= 0:
+            n = max(60, int(fps * 20))
+        w, h = int(cap.get(3)) or 1280, int(cap.get(4)) or 720
+        if not math.isfinite(fps) or fps <= 0 or min(w,h) < 32:
+            cap.release()
+            raise ValueError('Camera has invalid frame rate or dimensions.')
+        return cap, dict(width=w, height=h, fps=fps, frames=n, duration_seconds=n/fps)
+    cap = cv2.VideoCapture(str(source))
     if not cap.isOpened():
-        raise ValueError(f'Cannot decode video: {path}')
+        raise ValueError(f'Cannot open source: {source}')
     fps = cap.get(cv2.CAP_PROP_FPS)
     n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     w, h = int(cap.get(3)), int(cap.get(4))
-    if not math.isfinite(fps) or fps <= 0 or n <= 0 or min(w,h) < 32:
+    if not math.isfinite(fps) or fps <= 0 or min(w,h) < 32:
         cap.release()
-        raise ValueError('Video has invalid frame rate, dimensions, or frame count.')
+        raise ValueError('Stream has invalid frame rate or dimensions.')
+    if n <= 0:
+        n = max(60, int(fps * 20))
     return cap, dict(width=w, height=h, fps=fps, frames=n, duration_seconds=n/fps)
 
 def pixel_box(region, w, h):
@@ -738,17 +773,27 @@ def export_event(cap, metadata, event, box, folder, config, cancel, timeline=Non
 def analyze(path, output_root=None, config=None, progress=None, cancel=None, pause_gate=None, partial=None):
     config=json.loads(json.dumps(config or DEFAULT_CONFIG))
     validate_config(config)
+    source = coerce_video_source(path)
+    live_source=isinstance(source,int) or (isinstance(source,str) and '://' in source)
+    if live_source:
+        config['stabilize']=False
     if config.get('auto_area',False):
         from auto_analysis import analyze_auto
-        return analyze_auto(path,output_root,config,progress,cancel,pause_gate,partial)
+        return analyze_auto(source,output_root,config,progress,cancel,pause_gate,partial)
     cpu_threads=configure_cpu(config)
-    path=Path(path).resolve()
-    cap,metadata=open_video(path)
-    folder=Path(output_root or ROOT/'output')/(path.stem+'_'+datetime.now().strftime('%Y%m%d_%H%M%S')+'_'+uuid.uuid4().hex[:5])
+    path_key = source if isinstance(source, int) else Path(source).resolve()
+    cap,metadata=open_video(source)
+    if isinstance(source, int):
+        source_label=f'camera:{source}'
+        stem = f'camera_{source}'
+    else:
+        source_label = str(Path(source).resolve())
+        stem = Path(source).resolve().stem
+    folder=Path(output_root or ROOT/'output')/(stem+'_'+datetime.now().strftime('%Y%m%d_%H%M%S')+'_'+uuid.uuid4().hex[:5])
     folder.mkdir(parents=True,exist_ok=False)
     clips=folder/'clips'
     clips.mkdir()
-    report=dict(version=1,state='running',source=str(path),metadata=metadata,config=config,events=[],
+    report=dict(version=1,state='running',source=source_label,metadata=metadata,config=config,events=[],
                 count_definition='Candidate coolant bursts per area. Not individual physical droplets.',
                 time_basis='Source presentation timestamp when available; otherwise frame index / average FPS. No plant clock synchronization.',
                 warnings=[],performance={})

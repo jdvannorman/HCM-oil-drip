@@ -82,17 +82,24 @@ def decoded_frames(cap,total):
 def analyze_auto(path,output_root,config,progress,cancel,pause_gate=None,partial=None):
     from drip_core import (ROOT,open_video,check_cancel,save_json,gray_blur,RegionDetector,configure_cpu,
                            group_events,classify_regular_patterns,classify_location_groups,classify_visual_behavior,export_event,
-                           write_csv,write_patterns_csv,write_location_groups_csv,peak_memory_mb,Cancelled)
+                           write_csv,write_patterns_csv,write_location_groups_csv,peak_memory_mb,Cancelled,coerce_video_source)
+    source = coerce_video_source(path)
     if config.get('cpu_threads','auto')=='auto':
         if progress:progress(0,'Auto-selecting the fastest CPU thread count (first run only)…')
-        config['resolved_cpu_threads']=select_cpu_threads_for_video(path,config,cancel,pause_gate)
+        config['resolved_cpu_threads']=select_cpu_threads_for_video(source,config,cancel,pause_gate)
     cpu_threads=configure_cpu(config)
-    cap,meta=open_video(path)
-    path=Path(path).resolve()
-    folder=Path(output_root or ROOT/'output')/(path.stem+'_auto_'+datetime.now().strftime('%Y%m%d_%H%M%S')+'_'+uuid.uuid4().hex[:5])
+    cap,meta=open_video(source)
+    if isinstance(source, int):
+        source_label=f'camera:{source}'
+        stem=f'camera_{source}'
+    else:
+        path=Path(source).resolve()
+        source_label=str(path)
+        stem=path.stem
+    folder=Path(output_root or ROOT/'output')/(stem+'_auto_'+datetime.now().strftime('%Y%m%d_%H%M%S')+'_'+uuid.uuid4().hex[:5])
     folder.mkdir(parents=True)
     (folder/'clips').mkdir()
-    report=dict(version=2,state='running',source=str(path),metadata=meta,config=config,events=[],warnings=[],performance={},
+    report=dict(version=2,state='running',source=source_label,metadata=meta,config=config,events=[],warnings=[],performance={},
                 region_timeline='region_timeline.json',count_definition='Candidate coolant bursts, not confirmed droplets.',
                 time_basis='Source PTS where available; clip timing uses constant average FPS.')
     save_json(folder/'results.json',report)
