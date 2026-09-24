@@ -906,7 +906,8 @@ def analyze(path, output_root=None, config=None, progress=None, cancel=None, pau
                             performance=dict(analysis_fps=round(max(0,scanned_frame+1)/elapsed,2),
                                              detection_realtime_ratio=round(max(0,scanned_frame+1)/elapsed/metadata['fps'],2)))
             partial(folder,snapshot)
-        for index in range(metadata['frames']):
+        index=0
+        while live_source or index<metadata['frames']:
             if pause_gate and not pause_gate.is_set():emit_partial(index-1)
             check_cancel(cancel,pause_gate)
             ok,frame=cap.read()
@@ -922,7 +923,9 @@ def analyze(path, output_root=None, config=None, progress=None, cancel=None, pau
                     best=max(spots,key=lambda s:s['contrast'])
                     observations[name].append(dict(region=name,frame=index,score=best['contrast'],bbox=best['box'],components=len(spots),transform=matrix.tolist()))
             if index%15==0:
-                update(.65*index/metadata['frames'],f'Analyzing frame {index+1}/{metadata["frames"]}')
+                update(0 if live_source else .65*index/metadata['frames'],
+                       f'Live scan: {index+1} frames analyzed' if live_source else f'Analyzing frame {index+1}/{metadata["frames"]}')
+            index+=1
         detection_elapsed=time.perf_counter()-start_time
         events=current_events()
         use_pts=len(timestamps)>1 and all(b>a for a,b in zip(timestamps,timestamps[1:]))
@@ -975,6 +978,18 @@ def analyze(path, output_root=None, config=None, progress=None, cancel=None, pau
         update(1,f'Complete: {len(events)} candidate events (review required)')
         return folder,report
     except Exception as exc:
+        if isinstance(exc,Cancelled) and live_source and 'current_events' in locals():
+            report['events']=current_events()
+            report['patterns']=classify_regular_patterns(report['events'],metadata)
+            report['location_groups']=classify_location_groups(report['events'],metadata)
+            classify_visual_behavior(report['events'],report['location_groups'],metadata)
+            report['state']='complete'
+            report['warnings'].append('Live scan stopped by the user. Results cover the frames captured before cancellation.')
+            save_json(folder/'results.json',report)
+            write_csv(folder,report['events'])
+            write_patterns_csv(folder,report['patterns'])
+            write_location_groups_csv(folder,report['location_groups'])
+            return folder,report
         report['state']='cancelled' if isinstance(exc,Cancelled) else 'failed'
         report['error']=str(exc)
         save_json(folder/'results.json',report)
