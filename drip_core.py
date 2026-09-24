@@ -300,7 +300,7 @@ class RegionDetector:
         # Remove broad illumination/reflection changes, preserving small spots.
         local=diff-cv2.GaussianBlur(diff,(0,0),5)
         threshold=self.config['threshold']
-        mask=((local>threshold)&(diff>threshold)).astype(np.uint8)*255
+        mask=((np.abs(local)>threshold)&(np.abs(diff)>threshold)).astype(np.uint8)*255
         valid=self.valid
         if polygon is not None:
             key=tuple(tuple(float(value) for value in point) for point in polygon)
@@ -322,7 +322,7 @@ class RegionDetector:
                 continue
             if w>90 or h>120 or max(w/h,h/w)>8:
                 continue
-            contrast=float(local[labels==i].max())
+            contrast=float(np.abs(local[labels==i]).max())
             spots.append(dict(box=[x,y,x+w,y+h],area=area,contrast=round(contrast,2),center=centers[i].tolist()))
         # Adapt even if a reflection persists; short transients remain detectable.
         cv2.accumulateWeighted(gray,self.background,.08)
@@ -938,7 +938,7 @@ def analyze(path, output_root=None, config=None, progress=None, cancel=None, pau
             report['warnings'].append('Variable frame timing detected. Report times use presentation timestamps; exported clips use constant average FPS and may differ slightly.')
         if unstable:
             report['warnings'].append(f'{unstable} frames skipped because camera alignment failed. Zero candidates is not proof of no dripping.')
-        if '_c' in path.stem.lower():
+        if '_c' in stem.lower():
             report['warnings'].append('This appears to be a marked/re-encoded copy. Prefer the original for counting; do not add both copies together.')
         report['warnings'].append('No independent accuracy validation yet. Reflections, missed small/dark droplets, and merged bursts require human review.')
         report['warnings'].append('Clip audio is omitted. Sources are never modified.' if config.get('export_clips',False)
