@@ -974,8 +974,9 @@ class App:
             for i,path in enumerate(targets):
                 if self.cancel.is_set():break
                 try:
+                    source_label=path.name if isinstance(path,Path) else str(path)
                     def callback(value,message):
-                        self.messages.put(('progress',((i+value)/len(targets)*100,f'{path.name}: {message}')))
+                        self.messages.put(('progress',((i+value)/len(targets)*100,f'{source_label}: {message}')))
                     def partial_callback(folder,report):
                         self.messages.put(('partial_report',(folder,report)))
                     folder,report=analyze(path,ROOT/'output',cfg,callback,self.cancel,self.run_gate,partial_callback)
