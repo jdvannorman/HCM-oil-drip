@@ -19,6 +19,37 @@ sys.path.insert(0, str(ROOT / '.deps'))
 import cv2
 import numpy as np
 
+class ScreenCapture:
+    def __init__(self, monitor, fps=30.0):
+        import mss
+        self._sct=mss.mss()
+        self._monitor=monitor
+        self._fps=float(fps)
+        self._frame=0
+
+    def isOpened(self):
+        return True
+
+    def read(self):
+        image=np.asarray(self._sct.grab(self._monitor))
+        frame=cv2.cvtColor(image,cv2.COLOR_BGRA2BGR)
+        self._frame+=1
+        return True,frame
+
+    def get(self,property_id):
+        if property_id==cv2.CAP_PROP_FRAME_WIDTH:return self._monitor['width']
+        if property_id==cv2.CAP_PROP_FRAME_HEIGHT:return self._monitor['height']
+        if property_id==cv2.CAP_PROP_FPS:return self._fps
+        if property_id==cv2.CAP_PROP_FRAME_COUNT:return 0
+        if property_id==cv2.CAP_PROP_POS_MSEC:return self._frame*1000/self._fps
+        return 0
+
+    def set(self,property_id,value):
+        return property_id==cv2.CAP_PROP_POS_FRAMES
+
+    def release(self):
+        self._sct.close()
+
 LOGICAL_CPUS=os.cpu_count() or 8
 CPU_IDENTIFIER=os.environ.get('PROCESSOR_IDENTIFIER') or platform.processor() or platform.machine()
 DEFAULT_CPU_THREADS=max(2,min(12,LOGICAL_CPUS-2 if LOGICAL_CPUS>4 else LOGICAL_CPUS))
@@ -146,6 +177,8 @@ def coerce_video_source(path):
         value=text.split(':',1)[1].strip()
         if not value:value='0'
         return int(value)
+    if text.lower().startswith('screen:'):
+        return text
     if '://' in text:
         return text
     if text.lower().startswith(('rtsp://','http://','https://','rtmp://','udp://','tcp://')):
@@ -155,6 +188,16 @@ def coerce_video_source(path):
 
 def open_video(path):
     source = coerce_video_source(path)
+    if isinstance(source,str) and source.lower().startswith('screen:'):
+        try:
+            left,top,width,height=[int(value) for value in source.split(':',1)[1].split(',')]
+        except (ValueError,TypeError):
+            raise ValueError('Screen source must be screen:left,top,width,height.')
+        if width<32 or height<32:
+            raise ValueError('Screen capture area is too small.')
+        cap=ScreenCapture(dict(left=left,top=top,width=width,height=height))
+        fps=30.0
+        return cap,dict(width=width,height=height,fps=fps,frames=max(60,int(fps*20)),duration_seconds=20)
     if isinstance(source, int):
         cap = cv2.VideoCapture(source)
         if not cap.isOpened():
@@ -774,7 +817,8 @@ def analyze(path, output_root=None, config=None, progress=None, cancel=None, pau
     config=json.loads(json.dumps(config or DEFAULT_CONFIG))
     validate_config(config)
     source = coerce_video_source(path)
-    live_source=isinstance(source,int) or (isinstance(source,str) and '://' in source)
+    screen_source=isinstance(source,str) and source.lower().startswith('screen:')
+    live_source=isinstance(source,int) or screen_source or (isinstance(source,str) and '://' in source)
     if live_source:
         config['stabilize']=False
     if config.get('auto_area',False):
@@ -786,6 +830,9 @@ def analyze(path, output_root=None, config=None, progress=None, cancel=None, pau
     if isinstance(source, int):
         source_label=f'camera:{source}'
         stem = f'camera_{source}'
+    elif screen_source:
+        source_label=str(source)
+        stem='screen_capture'
     else:
         source_label = str(Path(source).resolve())
         stem = Path(source).resolve().stem

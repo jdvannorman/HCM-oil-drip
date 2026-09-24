@@ -399,32 +399,89 @@ class App:
             dialog.destroy()
             self.open_camera_source(source.strip())
 
+        def capture_screen():
+            dialog.destroy()
+            self.choose_screen()
+
         buttons=ttk.Frame(frame)
         buttons.pack(fill='x',pady=(2,0))
         ttk.Button(buttons,text='Refresh').pack(side='left')
         buttons.winfo_children()[0].configure(command=scan)
         ttk.Button(buttons,text='Use selected',style='Accent.TButton',command=use_selected).pack(side='left',padx=(6,0))
         ttk.Button(buttons,text='Add camera or stream…',command=add_camera).pack(side='left',padx=(6,0))
+        ttk.Button(buttons,text='Capture screen area…',command=capture_screen).pack(side='left',padx=(6,0))
         ttk.Button(buttons,text='Cancel',command=dialog.destroy).pack(side='right')
         dialog.protocol('WM_DELETE_WINDOW',dialog.destroy)
         dialog.after(50,scan)
+
+    def choose_screen(self):
+        try:
+            import mss
+            with mss.mss() as sct:
+                monitor=sct.monitors[0]
+                shot=sct.grab(monitor)
+                image=Image.frombytes('RGB',shot.size,shot.rgb)
+        except Exception as exc:
+            messagebox.showerror('Screen capture unavailable',f'Could not capture the desktop: {exc}')
+            return
+        overlay=tk.Toplevel(self.root)
+        overlay.overrideredirect(True)
+        overlay.attributes('-topmost',True)
+        overlay.geometry(f'{monitor["width"]}x{monitor["height"]}+{monitor["left"]}+{monitor["top"]}')
+        canvas=tk.Canvas(overlay,width=monitor['width'],height=monitor['height'],highlightthickness=0)
+        canvas.pack()
+        photo=ImageTk.PhotoImage(image)
+        canvas.create_image(0,0,anchor='nw',image=photo)
+        canvas.create_text(20,20,anchor='nw',fill='white',text='Drag over the video window. Esc cancels.',font=('Segoe UI',14,'bold'))
+        start=[None,None]
+        rectangle=[None]
+
+        def down(event):
+            start[:]=[event.x,event.y]
+            if rectangle[0]:canvas.delete(rectangle[0])
+
+        def move(event):
+            if start[0] is None:return
+            if rectangle[0]:canvas.delete(rectangle[0])
+            rectangle[0]=canvas.create_rectangle(start[0],start[1],event.x,event.y,outline='#65e5bd',width=4)
+
+        def up(event):
+            if start[0] is None:return
+            x0,x1=sorted((start[0],event.x))
+            y0,y1=sorted((start[1],event.y))
+            if x1-x0<32 or y1-y0<32:return
+            source=f'screen:{monitor["left"]+x0},{monitor["top"]+y0},{x1-x0},{y1-y0}'
+            overlay.destroy()
+            self.open_camera_source(source)
+
+        canvas.bind('<ButtonPress-1>',down)
+        canvas.bind('<B1-Motion>',move)
+        canvas.bind('<ButtonRelease-1>',up)
+        overlay.bind('<Escape>',lambda event:overlay.destroy())
+        overlay.focus_force()
 
     def open_camera_source(self, source):
         source=source.strip()
         try:
             if self.cap:self.cap.release()
-            if source.lower().startswith('camera:'):
+            screen_source=source.lower().startswith('screen:')
+            if screen_source:
+                cap,meta=open_video(source)
+                source_value=source
+            elif source.lower().startswith('camera:'):
                 source_value=int(source.split(':',1)[1] or 0)
+                cap=cv2.VideoCapture(source_value)
             elif source.lower().startswith(('rtsp://','http://','https://','rtmp://','udp://','tcp://')):
                 source_value=source
+                cap=cv2.VideoCapture(str(source_value))
             else:
                 source_value=int(source) if source.isdigit() else source
-            cap=cv2.VideoCapture(source_value if isinstance(source_value,(int,float)) else str(source_value))
+                cap=cv2.VideoCapture(source_value if isinstance(source_value,(int,float)) else str(source_value))
             if not cap.isOpened():
                 raise ValueError(f'Cannot open source: {source}')
-            fps=cap.get(cv2.CAP_PROP_FPS) or 30.0
-            width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
-            height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
+            fps=meta['fps'] if screen_source else cap.get(cv2.CAP_PROP_FPS) or 30.0
+            width=meta['width'] if screen_source else int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
+            height=meta['height'] if screen_source else int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
             self.camera_mode=True
             self.camera_device=source_value if isinstance(source_value,(int,float)) else source_value
             self.cap=cap
@@ -432,8 +489,8 @@ class App:
             self.current=source_value if isinstance(source_value,(int,float)) else source_value
             if isinstance(self.current, (int,float)):
                 self.current=f'camera:{int(self.current)}'
-            self.title.set(f'Camera {self.current}' if self.current.lower().startswith('camera:') else self.current)
-            self.info.set(f'Live camera feed\n{width} × {height}  |  {fps:.2f} fps')
+            self.title.set('Screen capture' if screen_source else (f'Camera {self.current}' if self.current.lower().startswith('camera:') else self.current))
+            self.info.set(f'Screen capture\n{width} × {height}  |  {fps:.2f} fps' if screen_source else f'Live camera feed\n{width} × {height}  |  {fps:.2f} fps')
             self.slider.configure(state='disabled')
             self.play_button.configure(text='Live')
             self.index=0
@@ -982,7 +1039,7 @@ class App:
                     folder,report=analyze(path,ROOT/'output',cfg,callback,self.cancel,self.run_gate,partial_callback)
                     self.messages.put(('report',(folder,report)))
                 except Cancelled:break
-                except Exception as exc:errors.append(f'{path.name}: {exc}')
+                except Exception as exc:errors.append(f'{source_label}: {exc}')
             self.messages.put(('done',errors))
         threading.Thread(target=worker,daemon=True).start()
 
