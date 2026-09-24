@@ -1,0 +1,15 @@
+.deps/
+.venv/
+__pycache__/
+inspection/
+output/
+validation/
+settings.json
+*.log
+
+# Local video inputs are not part of the source repository.
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.wmv

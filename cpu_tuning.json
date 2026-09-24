@@ -1,0 +1,20 @@
+{
+  "cpu_identifier": "Intel64 Family 6 Model 191 Stepping 2, GenuineIntel",
+  "logical_cpus": 20,
+  "opencv": "4.12.0",
+  "algorithm": "actual_auto_pipeline_v2",
+  "candidates": [
+    7,
+    12,
+    18
+  ],
+  "selected": 7,
+  "seconds": {
+    "7": 1.641315,
+    "12": 1.738353,
+    "18": 1.971179
+  },
+  "sample_frames_per_trial": 120,
+  "trials_per_candidate": 2,
+  "created_at": "2026-09-16T18:00:16"
+}
